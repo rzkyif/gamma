@@ -1,2 +1,2 @@
 # gamma
-An application of the A* algorithm on pathfinding for games.
+Penerapan Teori Graf dan algoritma A* dalam pencarian jalan terdekat melalui halangan.
