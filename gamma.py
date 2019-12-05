@@ -4,23 +4,43 @@ import random
 import keyboard
 import math
 import time
+from termcolor import cprint, colored, COLORS
 
-X = ' '
-WALL = 'W'
+X = '░'
+WALL = '█'
+CURSOR = '╳'
+PATH = '▓'
+CHECKED = '▒'
+LEFT_TOP_CORNER = '┏'
+LEFT_BOTTOM_CORNER = '┗'
+RIGHT_TOP_CORNER = '┓'
+RIGHT_BOTTOM_CORNER = '┛'
+HORIZONTAL_LINE = '━'
+VERTICAL_LINE = '┃'
+
 M = 10
 N = 50
 
 DRAWDELAY = 25
 DIJKSTRA = False
-SEED = 25
+OPTIMAL = True
+FIXED_COST = False
+SEED = 27
+
+GOTO = [5,2]
 
 UP = 'w'
 DOWN = 's'
 RIGHT = 'd'
 LEFT = 'a'
+TRACE = 't'
+ESC = 'esc'
+RESET = 'r'
+GO = 'g'
 
 class AStarQueue:
-    # queue
+    # locals:
+    #   queue
 
     def __init__(self):
         self.queue = []
@@ -29,7 +49,7 @@ class AStarQueue:
         return str(self.queue)
 
     def Insert(self, node):
-        if self.Contain(node):
+        if self.ContainBetter(node):
             return
         i = 0
         while i < len(self.queue):
@@ -48,8 +68,8 @@ class AStarQueue:
         else:
             self.queue.insert(i, node)
     
-    def Contain(self, node):
-        return any(x.pos == node.pos for x in self.queue)
+    def ContainBetter(self, node):
+        return any(x.pos == node.pos and x.cost <= node.cost for x in self.queue)
     
     def Pop(self):
         if self.queue:
@@ -61,14 +81,18 @@ class AStarGraph:
     def __init__(self):
         return
     
-    def neighbours(self, node):
+    def neighbors(self, node):
         return [node.pos.up(), node.pos.down(), node.pos.right(), node.pos.left()]
 
+    def weight(self, a, b):
+        return 1
+
 class AStarNode:
-    # pos
-    # cost
-    # nearness
-    # priority
+    # locals:
+    #   pos
+    #   cost
+    #   nearness
+    #   priority
 
     def __init__(self, pos, parent, start, end):
         self.pos = pos
@@ -87,14 +111,21 @@ class AStarNode:
         return f'{self.pos} {self.cost} {self.nearness} {self.priority}'
 
     def generate_cost(self, start):
-        return math.sqrt((self.pos.i-start.i)*(self.pos.i-start.i) + (self.pos.j-start.j)*(self.pos.j-start.j))
+        if FIXED_COST:
+            return math.sqrt((self.pos.i-start.i)*(self.pos.i-start.i) + (self.pos.j-start.j)*(self.pos.j-start.j))
+        else:
+            if self.parent:
+                return self.parent.cost + 1
+            else:
+                return 0
 
     def generate_nearness(self, end):
         return math.sqrt((end.i-self.pos.i)*(end.i-self.pos.i) + (end.j-self.pos.j)*(end.j-self.pos.j))
 
 class Vector:
-    # i
-    # j
+    # locals: 
+    #   i 
+    #   j
 
     def __init__(self, i, j):
         self.i = i
@@ -122,13 +153,15 @@ class Vector:
         return Vector(self.i, self.j-count)
 
 class Simulation:
-    # map
-    # height
-    # width
-    # playerpos
-    # cursorpos
-    # drawtime
-    # overlay
+    # locals:
+    #   map
+    #   height
+    #   width
+    #   playerpos
+    #   cursorpos
+    #   drawtime
+    #   overlay
+    #   trace
 
     def __init__(self, M, N):
         global X
@@ -149,7 +182,10 @@ class Simulation:
         
     def prep(self):
         self.drawtime = 0
+        self.checked = 0
+        self.pathed = 0
         self.map = [[X for j in range(self.width)] for i in range(self.height)]
+        self.trace = [[None for j in range(self.width)] for i in range(self.height)]
         self.placewalls()
         pos = self.random_coordinates()
         while not self.valid(pos):
@@ -194,9 +230,10 @@ class Simulation:
         keyboard.on_release_key(DOWN, self.on_down)
         keyboard.on_release_key(RIGHT, self.on_right)
         keyboard.on_release_key(LEFT, self.on_left)
-        keyboard.on_release_key('t', self.on_trace)
-        keyboard.on_release_key('esc', self.on_exit)
-        keyboard.on_release_key('r', self.on_reset)
+        keyboard.on_release_key(TRACE, self.on_trace)
+        keyboard.on_release_key(ESC, self.on_exit)
+        keyboard.on_release_key(RESET, self.on_reset)
+        keyboard.on_release_key(GO, self.on_goto)
     
     def on_up(self, event):
         x = self.cursorpos.up()
@@ -226,49 +263,72 @@ class Simulation:
 
     def on_reset(self, event):
         self.prep()
+    
+    def on_goto(self, evend):
+        self.cursorpos = Vector(GOTO[0], GOTO[1])
 
     def astar(self, start=None, end=None):
         if not start:
             start = self.playerpos
         if not end:
             end = self.cursorpos
+
+        self.trace = [[None for j in range(self.width)] for i in range(self.height)]
+        self.checked = 0
+        self.pathed = 0
         
         finishset = []
         nodeset = []
         queue = AStarQueue()
         graph = AStarGraph()
 
-        currentnode = AStarNode(start, start, start, end)
+        currentnode = AStarNode(start, None, start, end)
         nodeset.append(currentnode)
 
         found = False
         while not found:
-            for pos in graph.neighbours(currentnode):
-                if pos in finishset or not self.valid(pos):
+            for pos in graph.neighbors(currentnode):
+                if not self.valid(pos):
                     continue
 
-                node = AStarNode(pos, currentnode.pos, start, end)
-                queue.Insert(node)
-                nodeset.append(node)
+                node = AStarNode(pos, currentnode, start, end)
 
-                if node.pos == end:
-                    found = True
-                    break
+                i = next((i for i, x in enumerate(nodeset) if (x.pos == node.pos and x.cost > node.cost)), None)
+                if i:
+                    nodeset.insert(i, node)
                 else:
-                    self.place('_', pos)
-            
+                    if not any(x.pos == node.pos for x in nodeset):
+                        nodeset.append(node)
+
+                if pos in finishset:
+                    continue
+
+                queue.Insert(node)
+
+                if not OPTIMAL:
+                    if node.pos == end:
+                        found = True
+                        break
+
+                if node.pos != end:
+                    self.mark_checked(pos)
+
             finishset.append(currentnode.pos)
             currentnode = queue.Pop()
-            if currentnode == None:
-                break
 
+            if OPTIMAL:
+                if currentnode.pos == end:
+                    found = True
+                    break
+        
         if found:
             pos = end
             while pos != start:
-                pos = next(node.parent for node in nodeset if node.pos == pos)
+                pos = next(node.parent.pos for node in nodeset if node.pos == pos)
                 if pos != start:
-                    self.place('-', pos)
+                    self.mark_path(pos)
 
+        time.sleep(1)
         self.stop = True
     
     def draw(self):
@@ -277,26 +337,44 @@ class Simulation:
             self.overlay = [[None for j in range(self.width)] for i in range(self.height)]
             self.drawcursor()
 
-            print('-'*(self.width+2))
+            if self.pathed > 0:
+                print(colored(str(self.pathed), 'green'), 'steps required,', colored(str(self.checked), 'yellow'), 'nodes checked.')
+
+            print(LEFT_TOP_CORNER + HORIZONTAL_LINE*(self.width) + RIGHT_TOP_CORNER)
             for i in range(self.height):
-                print('|', end='')
+                print(VERTICAL_LINE, end='')
                 for j in range(self.width):
                     if self.overlay[i][j]:
                         print(self.overlay[i][j], end='')
                     else:
-                        print(self.map[i][j], end='')
-                print('|')
-            print('-'*(self.width+2))
-
-            print(self.cursorpos)
-            print(self.drawtime)
+                        if self.trace[i][j]:
+                            print(self.trace[i][j], end='')
+                        else:
+                            print(self.map[i][j], end='')
+                print(VERTICAL_LINE)
+            print(LEFT_BOTTOM_CORNER + HORIZONTAL_LINE*(self.width) + RIGHT_BOTTOM_CORNER)
+            
+            print(self.playerpos, end=' -> ')
+            print(self.cursorpos, end=' ')
+            print(self.version(), '\n')
         self.drawtime += 1
     
     def overlayplace(self, thing, vector):
         self.overlay[vector.i][vector.j] = thing
 
     def drawcursor(self):
-        self.overlayplace('+', self.cursorpos)
+        self.overlayplace(CURSOR, self.cursorpos)
+    
+    def mark_checked(self, pos):
+        self.trace[pos.i][pos.j] = colored(CHECKED, 'yellow')
+        self.checked += 1
+
+    def mark_path(self, pos):
+        self.trace[pos.i][pos.j] = colored(PATH, 'green')
+        self.pathed += 1
+    
+    def version(self):
+        return (colored('DIJKSTRA', 'red') if DIJKSTRA else colored('ASTAR', 'green')) + ' ' + (colored('OPTIMAL', 'green') if OPTIMAL else colored('FIRST', 'red')) + ' ' + (colored('FIXED_COST', 'red') if FIXED_COST else colored('GENERATED_COST', 'green'))
 
     def valid(self, vector):
         return (0 <= vector.i < self.height) and (0 <= vector.j < self.width) and not self.wall(vector)
