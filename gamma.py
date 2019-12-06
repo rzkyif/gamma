@@ -25,9 +25,9 @@ DRAWDELAY = 25
 DIJKSTRA = False
 OPTIMAL = True
 FIXED_COST = False
-SEED = 27
+SEED = None
 
-GOTO = [5,2]
+GOTO = [6,2]
 
 UP = 'w'
 DOWN = 's'
